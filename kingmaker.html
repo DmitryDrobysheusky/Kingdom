@@ -271,6 +271,7 @@ table.t td:first-child{min-width:0}
     <button class="tab" role="tab" data-tab="turn">Ход</button>
     <button class="tab" role="tab" data-tab="actions">Действия</button>
     <button class="tab" role="tab" data-tab="settlements">Поселения</button>
+    <button class="tab" role="tab" data-tab="relations">Отношения</button>
   </nav>
 </header>
 <main id="view"></main>
@@ -349,7 +350,7 @@ function blank(){
     creative:0, supernatural:0,
     next:{rp:0,rd:0,fame:0},
     turn:{n:1,used:{},taxesLast:false,taxesThis:false,steps:{},quellLast:"",quellThis:""},
-    settlements:[]
+    settlements:[], groups:[]
   };
 }
 let S = blank();
@@ -363,7 +364,7 @@ function normalize(s){
   for(const k of ["abilities","skills","commodities","worksites","next","turn"]) out[k]=Object.assign(blank()[k], (s&&s[k])||{});
   out.ruins = Object.assign(b.ruins, {}); for(const r in RUINS) out.ruins[r]=Object.assign({value:0,threshold:10,penalty:0},(s&&s.ruins&&s.ruins[r])||{});
   out.leaders = {}; for(const l in LEADERS) out.leaders[l]=Object.assign({name:"",pc:true,invested:false,vacant:false},(s&&s.leaders&&s.leaders[l])||{});
-  out.feats = Array.isArray(out.feats)?out.feats:[]; out.mods=Array.isArray(out.mods)?out.mods:[]; out.settlements=Array.isArray(out.settlements)?out.settlements:[];
+  out.feats = Array.isArray(out.feats)?out.feats:[]; out.mods=Array.isArray(out.mods)?out.mods:[]; out.settlements=Array.isArray(out.settlements)?out.settlements:[]; out.groups=Array.isArray(out.groups)?out.groups:[];
   out.settlements.forEach(st=>{ st.blocks = Array.isArray(st.blocks)&&st.blocks.length?st.blocks:[[]]; st.waterBorders=st.waterBorders||0; });
   out.turn.used = out.turn.used || {}; out.turn.steps = out.turn.steps||{};
   return out;
@@ -434,7 +435,7 @@ function income(){
 }
 function upkeepUnrest(){
   const over = S.settlements.filter(st=>settInfo(st).overcrowded).length;
-  return {over, war:S.atWar?1:0, ruler:S.leaders.ruler.vacant};
+  return {over, war:atWarNow()?1:0, ruler:S.leaders.ruler.vacant};
 }
 
 /* ---------- modifiers engine ---------- */
@@ -496,6 +497,14 @@ function gatherMods(ctx){
     push({id:"feat-"+f.id+"-"+ix,label:featName(f)+(m.name&&m.name!==f.name?": "+modName(m.name):""),value:m.value,type:m.type||"untyped",applyIf:m.applyIf,enabled:m.enabled,upgrade:m.upgradeResults,downgrade:m.downgradeResults,toggle:true}); }); });
   // creative solution
   if(c.opts.has("creative-solution")) push({id:"creative",label:"Творческое решение",value:2,type:"circumstance",fixed:true});
+  // diplomacy
+  const g = ctx.group && S.groups.find(x=>x.id===ctx.group);
+  if(g){ const t=S.turn.n;
+    if(g.status==="war" && ctx.activity==="send-diplomatic-envoy") push({id:"g-war",label:"Война с «"+g.name+"»",value:-4,type:"circumstance",fixed:true,worsen:1});
+    if(g.envoyBonusTurn===t && ctx.activity==="send-diplomatic-envoy") push({id:"g-envoy",label:"Повторное посольство к «"+g.name+"»",value:2,type:"circumstance",fixed:true});
+    if(g.groupBonusTurn===t) push({id:"g-warm",label:"Тёплый приём у «"+g.name+"»",value:2,type:"circumstance",fixed:true});
+    if(ctx.activity==="trade-commodities" && (g.status==="diplomatic"||g.status==="trade")) push({id:"g-trade",label:"Торговля с «"+g.name+"» (дипл. отношения)",value:1,type:"circumstance",fixed:true});
+  }
   // temp mods
   S.mods.forEach(m=>push(Object.assign({},m,{label:modName(m.label),toggle:true,temp:true})));
   return L;
@@ -715,11 +724,11 @@ function render(){
   document.getElementById("ksub").textContent = `${si.t} · ${S.size} гекс. · ход ${S.turn.n}${gov?" · "+govName("gov",gov):""}`;
   document.querySelectorAll(".tab").forEach(t=>t.setAttribute("aria-selected", t.dataset.tab===UI.tab));
   const v=document.getElementById("view");
-  const fn = {kingdom:viewKingdom, turn:viewTurn, actions:viewActions, settlements:viewSettlements}[UI.tab] || viewKingdom;
+  const fn = {kingdom:viewKingdom, turn:viewTurn, actions:viewActions, settlements:viewSettlements, relations:viewRelations}[UI.tab] || viewKingdom;
   v.innerHTML = fn();
   if(UI.sheet) renderSheet();
   document.querySelectorAll(".ro-only").forEach(el=>el.hidden=canWrite);
-  if(!canWrite) document.querySelectorAll("#view [data-bind], #view [data-sbind]").forEach(el=>el.disabled=true);
+  if(!canWrite) document.querySelectorAll("#view [data-bind], #view [data-sbind], #view [data-gbind]").forEach(el=>el.disabled=true);
 }
 
 function ribbon(){
@@ -755,7 +764,7 @@ function viewKingdom(){
     <label class="f">Сердце земель ${sel("heartland",hls,S.heartland)}</label>
   </div>
   <div class="row small">
-    <label class="row"><input type="checkbox" id="f-atWar" data-bind="atWar" ${S.atWar?"checked":""}> Королевство воюет (+1 Беспорядки за ход)</label>
+    <label class="row"><input type="checkbox" id="f-atWar" data-bind="atWar" ${atWarNow()?"checked":""} ${S.groups.some(g=>g.status==="war")?"disabled":""}> Королевство воюет (+1 Беспорядки за ход)${S.groups.some(g=>g.status==="war")?` — война с: ${S.groups.filter(g=>g.status==="war").map(g=>esc(g.name)).join(", ")}`:""}</label>
     <span class="spacer"></span>
     ${S.xp>=1000 && S.level<20? `<button class="btn pri sm ro-hide" data-a="levelup">Повысить уровень (−1000 опыта)</button>`:""}
     <button class="btn sm ro-hide" data-a="xp" data-n="10">+10 опыта за гекс</button>
@@ -937,6 +946,99 @@ function viewActions(){
   return h;
 }
 
+/* ---------- relations ---------- */
+const GST = {none:"Нет отношений", diplomatic:"Дипломатические отношения", trade:"Торговое соглашение", war:"Война", vassal:"Присягнули королевству"};
+const GST_C = {none:"", diplomatic:"good", trade:"good", war:"bad", vassal:"good"};
+const GKIND = {state:"Государство", faction:"Фракция"};
+function atWarNow(){ return !!S.atWar || S.groups.some(g=>g.status==="war"); }
+const hasRel = g => g.status==="diplomatic" || g.status==="trade";
+/* which groups each activity targets, and how its DC is built */
+const DIPLO = {
+  "send-diplomatic-envoy":{pick:g=>g.status==="none"||g.status==="war", dc:g=>[gdc(g),"переговоров"]},
+  "establish-trade-agreement":{pick:g=>g.status==="diplomatic", dc:g=>{ const n=gdc(g), c=controlDC(); return n>=c?[n,"переговоров"]:[c,"контроля, он выше"]; }},
+  "request-foreign-aid":{pick:hasRel, dc:g=>[gdc(g)+2,"переговоров +2"]},
+  "pledge-of-fealty":{pick:g=>g.status!=="vassal"&&g.status!=="war", dc:g=>[gdc(g),"переговоров"]},
+  "trade-commodities":{pick:hasRel, dc:null},
+};
+function gdc(g){ return (g.dc!=null && g.dc!=="" && !isNaN(+g.dc)) ? +g.dc : controlDC(); }
+function setGroup(gid){
+  const sh=UI.sheet; sh.group=gid||null; sh.dcNote=null;
+  const g=S.groups.find(x=>x.id===gid), D0=DIPLO[sh.id];
+  if(g && D0 && D0.dc){ const [v,why]=D0.dc(g); sh.dc=v; sh.dcAuto=false; sh.dcNote=(g.dc!=null&&g.dc!==""||why.startsWith("контроля"))?why:"контроля — СЛ переговоров не указан"; }
+}
+function groupPicker(sh){
+  const t=S.turn.n, g=S.groups.find(x=>x.id===sh.group);
+  let h=`<label class="f">С кем${S.groups.length?"":" — сначала добавьте группу на вкладке «Отношения»"}<select class="inp" id="rs-group"><option value="">— не выбрано —</option>${S.groups.map(x=>`<option value="${x.id}" ${x.id===sh.group?"selected":""}>${esc(x.name)} · ${GST[x.status]}</option>`).join("")}</select></label>`;
+  if(!g) return h;
+  const warn=[];
+  if(sh.id==="send-diplomatic-envoy"){
+    if(hasRel(g)) warn.push("С этой группой уже есть дипломатические отношения.");
+    if(g.envoyBlockUntil && t<=g.envoyBlockUntil) warn.push(`Посольства к «${esc(g.name)}» запрещены до конца хода ${g.envoyBlockUntil} (критический провал).`);
+    if(g.status==="war") warn.push("Идёт война: штраф −4 и результат ухудшается на ступень. Мастер может решить, что шансов нет вовсе.");
+  }
+  if((sh.id==="establish-trade-agreement"||sh.id==="request-foreign-aid") && !hasRel(g)) warn.push("Нужны дипломатические отношения с этой группой.");
+  if(sh.id==="establish-trade-agreement" && g.status==="trade") warn.push("Торговое соглашение с этой группой уже есть.");
+  if(warn.length) h+=`<div class="banner bad">${warn.join("<br>")}</div>`;
+  return h;
+}
+function applyGroupOutcome(sh, deg, reroll){
+  const g=S.groups.find(x=>x.id===sh.group); if(!g) return "";
+  if(reroll && sh.groupSnap){ Object.assign(g, JSON.parse(sh.groupSnap)); }
+  else sh.groupSnap=JSON.stringify(g);
+  const t=S.turn.n, before=g.status; let m="";
+  if(sh.id==="send-diplomatic-envoy"){
+    if(g.status==="war" && (deg==="criticalSuccess"||deg==="success")){ if(deg==="criticalSuccess") g.groupBonusTurn=t; m=`«${g.name}»: посольство принято. Война продолжается, пока вы не заключите мир на вкладке «Отношения»`; }
+    else if(deg==="criticalSuccess"){ if(!hasRel(g)) g.status="diplomatic"; g.groupBonusTurn=t; m=`«${g.name}»: установлены дипломатические отношения, +2 ко всем проверкам с ними до конца хода`; }
+    else if(deg==="success"){ if(!hasRel(g)) g.status="diplomatic"; m=`«${g.name}»: установлены дипломатические отношения`; }
+    else if(deg==="failure"){ g.envoyBonusTurn=t+1; m=`«${g.name}»: пока не готовы; посольство в ходу ${t+1} получит +2`; }
+    else { g.envoyBlockUntil=t+3; m=`«${g.name}»: посольство сорвано, новые посольства к ним нельзя до конца хода ${t+3}`; }
+  } else if(sh.id==="establish-trade-agreement"){
+    if(deg==="criticalSuccess"||deg==="success"){ g.status="trade"; m=`«${g.name}»: заключено торговое соглашение`; }
+    else if(deg==="failure") m=`«${g.name}»: соглашение будет заключено, если заплатить 2 кости ресурсов`;
+  } else if(sh.id==="pledge-of-fealty"){
+    if(deg==="criticalSuccess"||deg==="success"){ g.status="vassal"; m=`«${g.name}» присягнули королевству`; }
+  }
+  if(m) addLog(m+(before!==g.status?` (было: ${GST[before].toLowerCase()})`:""));
+  return m;
+}
+function viewRelations(){
+  const t=S.turn.n;
+  let h = `<div class="banner">Государства и фракции, с которыми имеет дело королевство. Броски «Отправить посольство», «Торговое соглашение», «Просить помощи» и «Присяга на верность» берут отсюда СЛ переговоров и сами меняют отношения. Война с любой группой даёт +1 Беспорядки за ход.</div>`;
+  const order={war:0,trade:1,diplomatic:2,vassal:3,none:4};
+  S.groups.slice().sort((a,b)=>order[a.status]-order[b.status]||a.name.localeCompare(b.name)).forEach(g=>{
+    const fx=[];
+    if(g.envoyBonusTurn && g.envoyBonusTurn>=t) fx.push(`<span class="chip good">+2 к посольству в ходу ${g.envoyBonusTurn}</span>`);
+    if(g.groupBonusTurn===t) fx.push(`<span class="chip good">+2 ко всем проверкам с ними в этом ходу</span>`);
+    if(g.envoyBlockUntil && g.envoyBlockUntil>=t) fx.push(`<span class="chip bad">посольства запрещены до хода ${g.envoyBlockUntil}</span>`);
+    const i=S.groups.indexOf(g);
+    h += `<section class="card"><div class="sec-h"><h2>${esc(g.name)}</h2><span class="aside">${GKIND[g.kind]||""}</span></div>
+      <div class="facts"><span class="chip ${GST_C[g.status]}">${GST[g.status]}</span>${fx.join("")}</div>
+      <div class="grid4">
+        <label class="f" style="grid-column:span 2">Статус<select class="inp" id="g-st-${g.id}" data-gbind="${i}.status">${Object.keys(GST).map(k=>`<option value="${k}" ${k===g.status?"selected":""}>${GST[k]}</option>`).join("")}</select></label>
+        <label class="f">СЛ переговоров<input class="inp n" id="g-dc-${g.id}" type="number" data-gbind="${i}.dc" placeholder="${controlDC()}" value="${g.dc==null?"":esc(g.dc)}"></label>
+        <label class="f">Тип<select class="inp" id="g-k-${g.id}" data-gbind="${i}.kind">${Object.keys(GKIND).map(k=>`<option value="${k}" ${k===g.kind?"selected":""}>${GKIND[k]}</option>`).join("")}</select></label>
+      </div>
+      <textarea class="inp" id="g-n-${g.id}" data-gbind="${i}.notes" placeholder="Заметки: кто правит, чего хотят, что обещали" style="min-height:60px">${esc(g.notes||"")}</textarea>
+      <div class="row ro-hide">
+        ${!hasRel(g)&&g.status!=="vassal"?`<button class="btn sm pri" data-a="gact" data-act="send-diplomatic-envoy" data-g="${g.id}">Отправить посольство</button>`:""}
+        ${g.status==="diplomatic"?`<button class="btn sm pri" data-a="gact" data-act="establish-trade-agreement" data-g="${g.id}">Торговое соглашение</button>`:""}
+        ${hasRel(g)?`<button class="btn sm" data-a="gact" data-act="request-foreign-aid" data-g="${g.id}">Просить помощи</button><button class="btn sm" data-a="gact" data-act="trade-commodities" data-g="${g.id}">Торговать товарами</button>`:""}
+        ${g.status!=="vassal"&&g.status!=="war"?`<button class="btn sm" data-a="gact" data-act="pledge-of-fealty" data-g="${g.id}">Присяга на верность</button>`:""}
+        <span class="spacer"></span>
+        ${g.status==="war"?`<button class="btn sm" data-a="gpeace" data-g="${g.id}">Заключить мир</button>`:`<button class="btn sm ghost danger" data-a="gwar" data-g="${g.id}">Объявить войну</button>`}
+        <button class="btn sm ghost danger" data-a="gdel" data-g="${g.id}">Удалить</button></div>
+      ${UI.gdel===g.id?`<div class="banner bad">Удалить «${esc(g.name)}»? <button class="btn sm danger" data-a="gdeldo" data-g="${g.id}">Удалить</button> <button class="btn sm" data-a="gdelno">Отмена</button></div>`:""}
+    </section>`;
+  });
+  if(!S.groups.length) h+=`<div class="muted small">Пока никого. Добавьте соседей, с которыми уже был контакт.</div>`;
+  h += `<section class="card ro-hide"><div class="sec-h"><h2>Новая группа</h2><span class="aside">СЛ переговоров есть в тексте кампании; если пусто — берётся СЛ контроля</span></div>
+    <div class="grid4"><label class="f" style="grid-column:span 2">Название<input class="inp" id="ng-name" placeholder="Напр. Брэвой, Кривая Улица, Нумерия"></label>
+    <label class="f">Тип<select class="inp" id="ng-kind"><option value="state">Государство</option><option value="faction">Фракция</option></select></label>
+    <label class="f">СЛ переговоров<input class="inp n" id="ng-dc" type="number" placeholder="${controlDC()}"></label></div>
+    <div class="row"><button class="btn pri" data-a="gadd">Добавить</button></div></section>`;
+  return h;
+}
+
 /* ---------- roll sheet ---------- */
 function openAct(id, preset){
   const a=ACT[id]; if(!a) return;
@@ -949,12 +1051,13 @@ function openAct(id, preset){
   let dc = typeof a.dc==="number"? a.dc : controlDC() + (DC_ADJ[id]||0);
   if(preset && preset.dc) dc=preset.dc;
   if(id==="establish-farmland") dc=controlDC();
-  UI.sheet={kind:"roll", id, skill:(preset&&preset.skill)||best, settlement:cap?cap.id:null, dc, dcAuto:!(preset&&preset.dc)&&typeof a.dc!=="number", off:new Set(), opts:new Set(), result:null, preset:preset||null, manual:"", usedAtOpen:S.turn.used[id]||0};
+  UI.sheet={kind:"roll", id, skill:(preset&&preset.skill)||best, settlement:cap?cap.id:null, dc, dcAuto:!(preset&&preset.dc)&&typeof a.dc!=="number", off:new Set(), opts:new Set(), result:null, preset:preset||null, manual:"", usedAtOpen:S.turn.used[id]||0, group:null};
+  if(DIPLO[id]){ const gid=(preset&&preset.group) || (S.groups.find(g=>DIPLO[id].pick(g))||{}).id; if(gid) setGroup(gid); }
   renderSheet();
 }
 function rollCtx(){
   const sh=UI.sheet, a=ACT[sh.id];
-  return {ability:SKILLS[sh.skill], skill:sh.skill, activity:sh.id, phase:a.phase, settlement:sh.settlement, opts:sh.opts};
+  return {ability:SKILLS[sh.skill], skill:sh.skill, activity:sh.id, phase:a.phase, settlement:sh.settlement, opts:sh.opts, group:sh.group||null};
 }
 function sheetRoll(){
   const sh=UI.sheet, a=ACT[sh.id];
@@ -969,14 +1072,16 @@ function sheetRoll(){
   let h = longRules? `<details class="rd"><summary>Правила действия</summary><div class="rules" style="margin-top:6px">${rulesInner}</div></details>` : `<div class="rules">${rulesInner}</div>`;
   if(sh.preset && sh.preset.structure){ const s=STR[sh.preset.structure]; h+=`<div class="banner">Строим: <b>${esc(strName(s))}</b> · ${costText(s)}</div>`; }
   if(once) h+=`<div class="banner bad">Это действие уже выполнено в этом ходу, а повторять его нельзя.</div>`;
+  if(DIPLO[sh.id]) h += groupPicker(sh);
+  if(sh.id==="manage-trade-agreements"){ const n=S.groups.filter(g=>g.status==="trade").length; h+=`<div class="banner">Торговых соглашений: <b>${n}</b> → стоимость ${2*n} ПР.${n?" "+S.groups.filter(g=>g.status==="trade").map(g=>esc(g.name)).join(", "):""}</div>`; }
   if(sh.id==="quell-unrest" && S.turn.quellLast) h+=`<div class="banner">В прошлом ходу беспорядки подавляли навыком «${SK_RU[S.turn.quellLast]}» — его сейчас использовать нельзя.</div>`;
   h += `<div><div class="small muted" style="margin-bottom:6px">Навык</div><div class="skpick">${sks.map(o=>{ const s=o.skill; const need=o.proficiencyRank||0; const locked=S.skills[s]<need;
     const v=sumMods(gatherMods(Object.assign(rollCtx(),{skill:s,ability:SKILLS[s]})),sh.off).total;
     return `<button class="skb ab-${SKILLS[s]} ${locked?"locked":""}" data-a="pickskill" data-sk="${s}" aria-pressed="${sh.skill===s}"><span class="nm">${SK_RU[s]}</span><span class="m">${fmt(v)}</span>${need?`<span class="small muted">нужно: ${RANKS[need].toLowerCase()}</span>`:""}</button>`; }).join("")}</div></div>`;
   h += `<div class="row">${S.settlements.length?`<label class="f" style="flex:1;min-width:160px">Поселение (бонусы построек)<select class="inp" id="rs-sett"><option value="">— без поселения —</option>${S.settlements.map(s=>`<option value="${s.id}" ${s.id===sh.settlement?"selected":""}>${esc(s.name)}${s.capital?" (столица)":""}</option>`).join("")}</select></label>`:""}
-    <label class="f" style="width:130px">СЛ${sh.dcAuto?" (контроля"+(DC_ADJ[sh.id]?" +"+DC_ADJ[sh.id]:"")+")":""}<input class="inp n" id="rs-dc" type="number" value="${sh.dc}"></label>
+    <label class="f" style="width:130px">СЛ${sh.dcNote?" ("+sh.dcNote+")":sh.dcAuto?" (контроля"+(DC_ADJ[sh.id]?" +"+DC_ADJ[sh.id]:"")+")":""}<input class="inp n" id="rs-dc" type="number" value="${sh.dc}"></label>
     ${S.creative>0?`<label class="row small" style="align-self:end;padding-bottom:8px"><input type="checkbox" id="rs-creative" ${sh.opts.has("creative-solution")?"checked":""}> Творческое решение (+2), осталось ${S.creative}</label>`:""}</div>`;
-  if(String(a.dc)!=="control" && typeof a.dc!=="number" && !(sh.preset&&sh.preset.dc)) h+=`<div class="small muted">СЛ этого действия особый (${a.dc==="custom"?"по постройке или решению мастера":a.dc==="negotiation"||a.dc==="negotiationOrControl"?"СЛ переговоров с группой":a.dc==="event"?"СЛ события":"по решению мастера"}); по умолчанию подставлен СЛ контроля — поправьте при необходимости.</div>`;
+  if(String(a.dc)!=="control" && typeof a.dc!=="number" && !(sh.preset&&sh.preset.dc) && !(DIPLO[sh.id]&&sh.group)) h+=`<div class="small muted">СЛ этого действия особый (${a.dc==="custom"?"по постройке или решению мастера":a.dc==="negotiation"||a.dc==="negotiationOrControl"?"СЛ переговоров с группой":a.dc==="event"?"СЛ события":"по решению мастера"}); по умолчанию подставлен СЛ контроля — поправьте при необходимости.</div>`;
   h += `<div class="mods">${L.map(m=>{ const on = sum.active.includes(m); const counted = sum.used.has(m.id)&&on;
     const cb = m.toggle? `<input type="checkbox" data-a="togglemod" data-id="${m.id}" ${on?"checked":""} aria-label="учитывать">` : `<span></span>`;
     return `<div class="mod ${counted?"":"off"}">${cb}<span>${esc(m.label)}<span class="ty">${TYPE_RU[m.type]||""}${on&&!counted?" · не суммируется":""}</span></span><span class="v">${m.value||!(m.upgrade||m.downgrade)?fmt(m.value):"эфф."}</span></div>`; }).join("")}</div>`;
@@ -1000,6 +1105,7 @@ function doRoll(reroll){
   let d = degreeOf(total, sh.dc, nat), notes=[];
   sum.active.forEach(m=>{ (m.upgrade||[]).forEach(u=>{ if(DEG[d]===u.upgrade && d<3){ d++; notes.push(m.label+": результат улучшен"); } });
                           (m.downgrade||[]).forEach(u=>{ if(DEG[d]===u.downgrade && d>0){ d--; notes.push(m.label+": результат ухудшен"); } }); });
+  sum.active.forEach(m=>{ if(m.worsen && d>0){ d--; notes.push(m.label+": результат ухудшен на ступень"); } });
   if(S.unrest>=anarchyAt() && d>0){ d--; notes.push("Анархия: результат ухудшен на ступень"); }
   const deg=DEG[d];
   // consume
@@ -1009,6 +1115,7 @@ function doRoll(reroll){
   if(!reroll){ S.turn.used[a.id]=(S.turn.used[a.id]||0)+1; }
   if(a.id==="collect-taxes") S.turn.taxesThis=true;
   if(a.id==="quell-unrest") S.turn.quellThis=sh.skill;
+  if(DIPLO[a.id] && sh.group){ const gm=applyGroupOutcome(sh, DEG[d], reroll); if(gm) notes.push(gm); }
   sh.result = {nat, mod:sum.total, total, dc:sh.dc, deg, notes, manual, done:{}, reroll:!!reroll};
   sh.manual="";
   const who = sh.preset&&sh.preset.structure ? " — "+strName(STR[sh.preset.structure]) : "";
@@ -1018,7 +1125,7 @@ function doRoll(reroll){
 }
 function resultHtml(r,a){
   const outcome = actTxt(a,r.deg);
-  const outMods = (a[r.deg]&&a[r.deg].modifiers)||[];
+  const outMods = (UI.sheet.group && a.id==="send-diplomatic-envoy") ? [] : ((a[r.deg]&&a[r.deg].modifiers)||[]);
   let h = `<div class="result ${DEG_C[r.deg]}"><div class="row"><span class="d20 ${r.nat===20?"n20":r.nat===1?"n1":""}">${r.nat}</span><div><div class="deg">${DEG_RU[r.deg]}</div><div class="calc">${r.nat} ${fmt(r.mod)} = ${r.total} · СЛ ${r.dc}${r.manual?" · свой бросок":""}</div></div></div>
     <div class="rules">${renderRich(outcome,true)}</div>`;
   if(outMods.length) h+=`<div class="row">${outMods.map((m,i)=>`<button class="fx ro-hide ${r.done["m"+i]?"done":""}" data-a="addoutmod" data-i="${i}">${r.done["m"+i]?"✓ ":""}Эффект: ${esc(modLabel(m))}</button>`).join("")}</div>`;
@@ -1027,6 +1134,7 @@ function resultHtml(r,a){
   h += `<div class="row ro-hide">`;
   if(struct && (r.deg==="success"||r.deg==="criticalSuccess")) h+=`<button class="btn sm pri ${r.done.place?"":""}" data-a="placestruct" ${r.done.place?"disabled":""}>${r.done.place?"✓ Размещено":"Разместить в поселении"}</button>`;
   if(struct) h+=`<button class="btn sm" data-a="paystruct" ${r.done.pay?"disabled":""}>${r.done.pay?"✓ Оплачено":"Списать стоимость"}${r.deg==="criticalSuccess"?" (½ товаров вернётся)":""}</button>`;
+  if(a.id==="establish-trade-agreement" && r.deg==="failure" && UI.sheet.group) h+=`<button class="btn sm pri" data-a="tradepay" ${r.done.tradepay?"disabled":""}>${r.done.tradepay?"✓ Соглашение заключено":"Заплатить 2 кости ресурсов и заключить"}</button>`;
   if(S.fame>0 && !r.reroll) h+=`<button class="btn sm" data-a="famereroll">Перебросить за 1 ${S.fameType==="infamy"?"Бесславия":"Славы"}</button>`;
   h += `</div></div>`;
   return h;
@@ -1176,6 +1284,15 @@ const A = {
     API=v; try{localStorage.setItem("km-api",API);}catch(e){} initGas(); },
   gasoff(){ API=""; try{localStorage.setItem("km-api","off");}catch(e){} clearInterval(gasPollT); mode="local"; setSync(); render(); initDb(); toast("Отключено, данные остаются на этом устройстве"); },
   copyfriend(){ const t=document.getElementById("friend-link"); try{ navigator.clipboard.writeText(t.value).then(()=>toast("Ссылка скопирована"),()=>{t.select();}); }catch(e){ t.select(); } },
+  gadd(){ const n=document.getElementById("ng-name").value.trim(); if(!n){ toast("Введите название"); return; } const dc=document.getElementById("ng-dc").value;
+    S.groups.push({id:uid(),name:n,kind:document.getElementById("ng-kind").value,dc:dc===""?null:+dc,status:"none",notes:""}); addLog("Новая группа в отношениях: "+n); commit(); },
+  gact(el){ openAct(el.dataset.act,{group:el.dataset.g}); },
+  gwar(el){ const g=S.groups.find(x=>x.id===el.dataset.g); g.status="war"; addLog(`Война с «${g.name}»`); commit(); },
+  gpeace(el){ const g=S.groups.find(x=>x.id===el.dataset.g); g.status="none"; addLog(`Мир с «${g.name}»`); commit(); },
+  gdel(el){ UI.gdel=el.dataset.g; render(); }, gdelno(){ UI.gdel=null; render(); },
+  gdeldo(el){ const i=S.groups.findIndex(x=>x.id===el.dataset.g); const n=S.groups[i].name; S.groups.splice(i,1); UI.gdel=null; addLog("Удалена группа "+n); commit(); },
+  tradepay(){ const sh=UI.sheet, r=sh.result, g=S.groups.find(x=>x.id===sh.group); if(!g||r.done.tradepay) return; const die=sizeInfo(S.size).die; const a=rnd(die), b=rnd(die);
+    S.rp=Math.max(0,S.rp-a-b); g.status="trade"; r.done.tradepay=1; addLog(`«${g.name}»: доплачено 2d${die} = ${a+b} ПР, торговое соглашение заключено`); commit(); },
   export(){ UI.io="export"; render(); }, import(){ UI.io="import"; render(); }, closeio(){ UI.io=null; render(); },
   copyio(){ const t=document.getElementById("io"); try{ navigator.clipboard.writeText(t.value).then(()=>toast("Скопировано"),()=>{t.select();toast("Выделено — скопируйте вручную");}); }catch(e){ t.select(); } },
   doimport(){ try{ const d=JSON.parse(document.getElementById("io").value); S=normalize(d); UI.io=null; addLog("Данные королевства загружены из текста"); commit(); toast("Загружено"); }catch(e){ toast("Не получилось прочитать: это должен быть текст из «Экспорта»"); } },
@@ -1194,7 +1311,7 @@ const A = {
   fx(el){ const k="fx"+[...el.parentNode.querySelectorAll('[data-a="fx"]')].indexOf(el); if(el.classList.contains("done")) return;
     const msg=applyFx(el.dataset.dir, el.dataset.amt, el.dataset.res); if(!msg) return; el.classList.add("done"); el.textContent="✓ "+msg; addLog(msg); commit(true);
     // keep the sheet as is (button marked), refresh background view
-    const v=document.getElementById("view"); const fn={kingdom:viewKingdom,turn:viewTurn,actions:viewActions,settlements:viewSettlements}[UI.tab]; v.innerHTML=fn(); },
+    const v=document.getElementById("view"); const fn={kingdom:viewKingdom,turn:viewTurn,actions:viewActions,settlements:viewSettlements,relations:viewRelations}[UI.tab]; v.innerHTML=fn(); },
   flat(el){ const r=rnd(20), dc=+el.dataset.dc; const ok=r>=dc; el.textContent=`чистая СЛ ${dc}: выпало ${r} — ${ok?"успех":"провал"}`; el.classList.add("done"); addLog(`Чистая проверка СЛ ${dc}: ${r} — ${ok?"успех":"провал"}`); commit(true); },
   addoutmod(el){ const r=UI.sheet.result; const i=+el.dataset.i; if(r.done["m"+i]) return; const a=ACT[UI.sheet.id]; const m=a[r.deg].modifiers[i];
     S.mods.push({id:uid(),label:(m.name||actTitle(a)),value:m.value||0,type:m.type||"untyped",applyIf:m.applyIf||null,turns:m.turns||0,consume:!!m.isConsumedAfterRoll,upgrade:m.upgradeResults,downgrade:m.downgradeResults});
@@ -1281,6 +1398,9 @@ document.addEventListener("change",e=>{
   if(t.id==="rs-dc"){ UI.sheet.dc=+t.value||0; UI.sheet.dcAuto=false; renderSheet(); return; }
   if(t.id==="rs-manual"){ UI.sheet.manual=t.value; return; }
   if(t.id==="rs-creative"){ t.checked?UI.sheet.opts.add("creative-solution"):UI.sheet.opts.delete("creative-solution"); renderSheet(); return; }
+  if(t.id==="rs-group"){ setGroup(t.value); renderSheet(); return; }
+  if(t.dataset.gbind){ const [gi,k]=t.dataset.gbind.split("."); const g=S.groups[+gi]; if(!g) return; let v=t.value; if(k==="dc") v=v===""?null:+v;
+    if(k==="status" && g.status!==v) addLog(`«${g.name}»: ${GST[g.status].toLowerCase()} → ${GST[v].toLowerCase()}`); g[k]=v; commit(); return; }
   if(t.dataset.sbind){ const [si,k]=t.dataset.sbind.split("."); S.settlements[+si][k]=+t.value; commit(); return; }
   if(t.dataset.bind){
     const p=t.dataset.bind; let v;
